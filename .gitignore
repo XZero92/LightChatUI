@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 에디터/도구
+.claude/
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
