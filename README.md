@@ -1,70 +1,73 @@
 # Light Chat
 
-OpenAI 호환 API용 **단일 파일 채팅 클라이언트**. 웹 UI · 터미널(TUI) · 네이티브 GUI 세 가지 인터페이스가 `app.py` 하나에 들어 있으며, **외부 의존성이 전혀 없습니다(Python 표준 라이브러리만 사용).**
+*English · [한국어](README_KO.md)*
+
+A **single-file chat client** for OpenAI-compatible APIs. Three interfaces — web UI, terminal (TUI), and a native GUI — all live in a single `app.py`, with **zero external dependencies (Python standard library only).**
 
 ```
 LightChatUI/
-├── app.py        # 이 파일 하나가 전부 (UI 3종 + API 프록시 + 공유 코어)
-└── README.md
+├── app.py        # Everything is here (3 UIs + API proxy + shared core)
+├── README.md     # English (this document)
+└── README_KO.md  # Korean
 ```
 
 ---
 
-## 특징
+## Features
 
-- **단일 파일, 의존성 0** — `python app.py` 만으로 실행. `pip install` 불필요.
-- **세 가지 UI 공존** — 웹 / TUI / GUI 가 같은 코어를 공유.
-- **OpenAI 호환** — `/v1/chat/completions`, `/v1/models` 사용. OpenAI · Ollama · LM Studio · vLLM · LocalAI 등.
-- **스트리밍** 응답 + 응답 중 **중지**.
-- **모델 목록 자동 로드** + 편집 가능한 드롭다운/메뉴.
-- **연결 테스트** — 모델 새로고침 버튼이 겸함.
-- **TTFT / TPS 측정** — 각 응답마다 표시 (서버 usage 우선, 없으면 근사).
-- **휘발성 우선** — 웹은 `sessionStorage`(탭 닫으면 소멸), TUI/GUI는 메모리 한정.
-- **Cloudflare 등 게이트웨이 우회** — 프록시가 브라우저형 User-Agent 사용.
-
----
-
-## 요구사항
-
-- **Python 3.8+** (3.12에서 검증)
-- **GUI 모드(`--gui`)만** tkinter 필요:
-  - Windows · macOS (python.org 설치본): 기본 포함
-  - Linux: 배포판에 따라 `sudo apt install python3-tk` 등 필요할 수 있음
-- 웹 · TUI 모드는 추가 요구사항 없음
+- **Single file, zero dependencies** — run with just `python app.py`. No `pip install`.
+- **Three coexisting UIs** — web / TUI / GUI share the same core.
+- **OpenAI-compatible** — uses `/v1/chat/completions` and `/v1/models`. Works with OpenAI, Ollama, LM Studio, vLLM, LocalAI, etc.
+- **Streaming** responses with the ability to **stop** mid-response.
+- **Automatic model list loading** with an editable dropdown / menu.
+- **Connection test** — handled by the model-refresh button.
+- **TTFT / TPS metrics** — shown for every response (server-reported `usage` preferred, otherwise approximated).
+- **Volatile by design** — the web UI uses `sessionStorage` (cleared when the tab closes); TUI/GUI keep data in memory only.
+- **Bypasses gateways like Cloudflare** — the proxy sends a browser-style User-Agent.
 
 ---
 
-## 실행
+## Requirements
+
+- **Python 3.8+** (verified on 3.12)
+- **tkinter is required only for GUI mode (`--gui`):**
+  - Windows / macOS (python.org builds): bundled by default
+  - Linux: may require `sudo apt install python3-tk` (or distro equivalent)
+- Web and TUI modes have no extra requirements
+
+---
+
+## Running
 
 ```bash
-python app.py            # 웹 UI (기본 포트 8000) — 브라우저 자동 오픈
-python app.py 8080       # 웹 UI, 포트 지정
-python app.py --tui      # 터미널 채팅 (서버·프록시 불필요)
-python app.py --gui      # 네이티브 GUI 창 (tkinter, 서버·프록시 불필요)
-python app.py --help     # 사용법
+python app.py            # Web UI (default port 8000) — opens the browser automatically
+python app.py 8080       # Web UI on a specific port
+python app.py --tui      # Terminal chat (no server / proxy needed)
+python app.py --gui      # Native GUI window (tkinter, no server / proxy needed)
+python app.py --help     # Usage
 ```
 
 ---
 
-## 설정 항목
+## Settings
 
-| 항목 | 설명 | 예시 |
+| Field | Description | Example |
 |---|---|---|
-| **Base URL** | OpenAI 호환 엔드포인트 | `https://api.openai.com/v1`, `http://localhost:11434/v1` |
-| **API Key** | 인증 키 (`Authorization: Bearer …`) | `sk-...` |
-| **Model** | 모델 이름 (목록에서 선택 또는 직접 입력) | `gpt-4o-mini`, `llama3:8b` |
-| **System** | (선택) 시스템 프롬프트 | |
-| **Temperature** | (선택) 샘플링 온도 | `0.7` |
+| **Base URL** | OpenAI-compatible endpoint | `https://api.openai.com/v1`, `http://localhost:11434/v1` |
+| **API Key** | Auth key (`Authorization: Bearer …`) | `sk-...` |
+| **Model** | Model name (pick from the list or type it) | `gpt-4o-mini`, `llama3:8b` |
+| **System** | (optional) system prompt | |
+| **Temperature** | (optional) sampling temperature | `0.7` |
 
-### 환경변수 (TUI · GUI 한정)
+### Environment variables (TUI / GUI only)
 
-미리 지정하면 실행 시 입력을 건너뜁니다. (없으면 실행 중 입력받음)
+Set these in advance to skip the prompts at startup. (If unset, you'll be asked at runtime.)
 
 ```bash
 LC_BASE_URL   LC_API_KEY   LC_MODEL   LC_SYSTEM   LC_TEMPERATURE
 ```
 
-예 (PowerShell):
+Example (PowerShell):
 
 ```powershell
 $env:LC_BASE_URL="http://localhost:11434/v1"; $env:LC_API_KEY="dummy"; python app.py --tui
@@ -72,106 +75,106 @@ $env:LC_BASE_URL="http://localhost:11434/v1"; $env:LC_API_KEY="dummy"; python ap
 
 ---
 
-## 모드별 사용법
+## Usage by mode
 
-### 웹 UI (`python app.py`)
-- 브라우저에서 자동으로 열림 (반드시 `http://localhost:PORT`, `file://` 아님).
-- ⚙ 설정에서 항목 입력 → 모델 칸 ▾ 로 목록 펼침(전체 표시) 또는 직접 입력.
-- ↻ 버튼: 모델 새로고침 **겸 연결 테스트** (`✓ 연결 정상` / `✗ 연결 실패`).
-- 입력창: **Enter 전송 / Shift+Enter 줄바꿈**.
-- 각 AI 응답 하단에 `TTFT … · … tok · … tok/s` 표시.
+### Web UI (`python app.py`)
+- Opens in the browser automatically (must be `http://localhost:PORT`, **not** `file://`).
+- Enter values in ⚙ Settings → expand the model field with ▾ (shows all) or type directly.
+- ↻ button: refreshes the model list **and doubles as a connection test** (`✓ Connected` / `✗ Failed`).
+- Input box: **Enter to send / Shift+Enter for a newline**.
+- Each AI response shows `TTFT … · … tok · … tok/s` underneath.
 
-### 터미널 TUI (`python app.py --tui`)
-- API Key는 입력 시 `*`로 **마스킹 표시**.
-- 모델 선택은 **↑/↓ 방향키 메뉴**(Enter 선택, q 직접입력). 화면보다 길거나 비대화형이면 번호 입력으로 폴백.
-- 명령:
+### Terminal TUI (`python app.py --tui`)
+- The API Key is **masked with `*`** while typing.
+- Model selection uses an **↑/↓ arrow-key menu** (Enter to select, q to type manually). Falls back to numbered input if the list is taller than the screen or the session is non-interactive.
+- Commands:
 
-  | 명령 | 동작 |
+  | Command | Action |
   |---|---|
-  | `/model` | 모델 변경 |
-  | `/test` | 연결 테스트 |
-  | `/clear` | 대화 비우기 |
-  | `/help` | 도움말 |
-  | `/exit` | 종료 |
-  | `Ctrl+C` | (응답 중) 중지 |
+  | `/model` | Change model |
+  | `/test` | Connection test |
+  | `/clear` | Clear conversation |
+  | `/help` | Help |
+  | `/exit` | Quit |
+  | `Ctrl+C` | Stop (during a response) |
 
-### 네이티브 GUI (`python app.py --gui`)
-- tkinter 기본 테마(Windows = vista).
-- ↻ 모델/연결 버튼: 모델 새로고침 겸 연결 테스트.
-- Enter 전송 / Shift+Enter 줄바꿈, 응답 중 전송 버튼이 "중지"로 토글.
-- 각 응답 아래에 메트릭 줄 표시.
+### Native GUI (`python app.py --gui`)
+- Default tkinter theme (Windows = vista).
+- "↻ Model/Connection" button: refreshes models and tests the connection.
+- Enter to send / Shift+Enter for a newline; the send button toggles to "Stop" during a response.
+- A metrics line is shown under each response.
 
 ---
 
-## TTFT / TPS 측정
+## TTFT / TPS metrics
 
-| 지표 | 정의 | 정확도 |
+| Metric | Definition | Accuracy |
 |---|---|---|
-| **TTFT** | 요청 전송 → 첫 토큰 도착까지 | 항상 정확 |
-| **TPS** | 토큰수 ÷ (마지막 − 첫 토큰 시각) | 토큰 집계 방식에 의존 |
+| **TTFT** | Request sent → first token received | Always accurate |
+| **TPS** | tokens ÷ (last − first token time) | Depends on how tokens are counted |
 
-토큰 수는 요청 시 `stream_options.include_usage`로 **서버가 정확값(usage)을 주면 그것을 사용**하고, 주지 않으면 **수신 청크 수로 근사**하며 `~`를 붙입니다.
+The token count comes from `stream_options.include_usage`: if the **server returns an exact `usage` value, it is used**; otherwise the count is **approximated from the number of received chunks** and prefixed with `~`.
 
 ```
-TTFT 0.50s · 120 tok · 60.0 tok/s     (정확)
-TTFT 0.50s · ~80 tok · 40.0 tok/s     (근사)
+TTFT 0.50s · 120 tok · 60.0 tok/s     (exact)
+TTFT 0.50s · ~80 tok · 40.0 tok/s     (approximate)
 ```
 
 ---
 
-## 데이터 수명주기 / 프라이버시
+## Data lifecycle / privacy
 
-| 모드 | 저장 위치 | 재시작/재방문 후 |
+| Mode | Storage | After restart / revisit |
 |---|---|---|
-| **웹** | 그 탭의 `sessionStorage` | **탭을 닫으면 URL·키·대화기록 모두 소멸**. 같은 탭 새로고침에는 유지 |
-| **TUI** | 프로세스 메모리(또는 env) | 프로세스 종료 시 소멸 |
-| **GUI** | 프로세스 메모리(또는 env) | 창 종료 시 소멸 |
+| **Web** | the tab's `sessionStorage` | **URL, key, and history are all cleared when the tab closes**. Survives a same-tab reload |
+| **TUI** | process memory (or env vars) | gone when the process exits |
+| **GUI** | process memory (or env vars) | gone when the window closes |
 
-- 디스크에 평문으로 영속되는 데이터는 **없습니다**.
-- API 키는 `Authorization` 헤더로 **설정한 업스트림에만** 전송되며, 요청 URL 경로에 실리지 않아 접근 로그에 남지 않습니다.
-- 환경변수로 키를 지정하면 셸 환경·히스토리에 노출될 수 있으니 주의하세요.
+- **No data is persisted to disk in plaintext.**
+- The API key is sent via the `Authorization` header **only to the configured upstream**, and never appears in the request URL path, so it does not show up in access logs.
+- Supplying the key via an environment variable may expose it to the shell environment / history — use with care.
 
 ---
 
-## 아키텍처
+## Architecture
 
 ```
 app.py
-├─ 공유 코어   open_upstream() · list_models() · chat_stream() · _fmt_metrics()
-│              └ urllib + 브라우저형 User-Agent. 세 모드 공통.
-├─ 웹 모드     run_web()   HTTP 서버 + 내장 HTML + /proxy
-├─ TUI 모드    run_tui()   터미널 REPL (코어 직접 호출)
-└─ GUI 모드    run_gui()   tkinter (코어 직접 호출)
+├─ Shared core   open_upstream() · list_models() · chat_stream() · _fmt_metrics()
+│                └ urllib + browser-style User-Agent. Common to all three modes.
+├─ Web mode      run_web()   HTTP server + embedded HTML + /proxy
+├─ TUI mode      run_tui()   terminal REPL (calls the core directly)
+└─ GUI mode      run_gui()   tkinter (calls the core directly)
 ```
 
-### 웹이 프록시를 두는 이유 (CORS · Cloudflare)
-브라우저에서 외부 API를 직접 부르면 **CORS** 정책과, 일부 게이트웨이(예: Cloudflare)의 **봇 차단(403)** 에 막힙니다. 그래서 웹 모드는:
+### Why the web UI has a proxy (CORS · Cloudflare)
+Calling an external API directly from the browser runs into **CORS** policy and the **bot blocking (403)** of some gateways (e.g. Cloudflare). So the web mode:
 
-1. 브라우저는 **동일 출처**인 로컬 `/proxy` 로만 요청 → CORS·`origin=null` 문제 없음.
-2. 파이썬 프록시가 업스트림으로 **서버 대 서버**로 전달 → CORS 무관.
-3. 전달 시 **브라우저형 User-Agent** 를 붙여 Cloudflare 봇 차단 우회.
+1. The browser only talks to the **same-origin** local `/proxy` → no CORS / `origin=null` issues.
+2. The Python proxy forwards to the upstream **server-to-server** → CORS does not apply.
+3. It attaches a **browser-style User-Agent** when forwarding → bypasses Cloudflare bot blocking.
 
-TUI · GUI는 브라우저가 아니므로 위 문제 자체가 없어 **프록시 없이 코어를 직접 호출**합니다.
+The TUI and GUI are not browsers, so these issues don't exist and they **call the core directly without a proxy**.
 
 ---
 
-## 동작하는 백엔드 예시
+## Tested backends
 
-`Base URL` 만 바꾸면 그대로 동작합니다.
+Just change the `Base URL` and it works.
 
-| 백엔드 | Base URL |
+| Backend | Base URL |
 |---|---|
 | OpenAI | `https://api.openai.com/v1` |
 | Ollama | `http://localhost:11434/v1` |
 | LM Studio | `http://localhost:1234/v1` |
-| vLLM / LocalAI / 기타 호환 게이트웨이 | 각 서버 주소 + `/v1` |
+| vLLM / LocalAI / other compatible gateways | server address + `/v1` |
 
 ---
 
-## 트러블슈팅
+## Troubleshooting
 
-- **모델 목록 실패 / 연결 실패 `HTTP 401`** — API Key가 틀렸습니다.
-- **`HTTP 403`** — 게이트웨이(Cloudflare 등) 차단. 웹은 프록시가 UA로 우회하므로 거의 발생하지 않습니다.
-- **웹에서 `file://`로 열면 동작 안 함** — 반드시 `python app.py` 실행 후 `http://localhost:PORT`로 접속하세요.
-- **`stream_options` 오류로 요청 실패** — 드물게 이 옵션을 거부하는 서버가 있습니다. 그럴 경우 알려주시면 청크 근사만 쓰도록 되돌릴 수 있습니다.
-- **`--gui` 실행 시 tkinter 오류 (Linux)** — `sudo apt install python3-tk` 후 재시도.
+- **Model list / connection fails with `HTTP 401`** — the API Key is wrong.
+- **`HTTP 403`** — blocked by a gateway (e.g. Cloudflare). Rare on the web UI since the proxy works around it with the User-Agent.
+- **Web UI doesn't work when opened via `file://`** — always run `python app.py` and connect to `http://localhost:PORT`.
+- **Request fails due to `stream_options`** — a few servers reject this option. If that happens, let me know and it can be reverted to chunk-based approximation only.
+- **tkinter error on `--gui` (Linux)** — install `sudo apt install python3-tk` and retry.
