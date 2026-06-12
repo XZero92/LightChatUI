@@ -11,10 +11,9 @@
 
     python app.py [PORT]      # 웹 UI (기본 8000), 실행 시 브라우저 자동 오픈
     python app.py --tui       # 터미널 채팅 (서버·프록시 불필요)
-    python app.py --gui       # 네이티브 GUI (tkinter, 서버·프록시 불필요)
     python app.py --help
 
-TUI·GUI 모드는 환경변수로 설정을 미리 지정할 수 있다(없으면 실행 중 입력):
+TUI 모드는 환경변수로 설정을 미리 지정할 수 있다(없으면 실행 중 입력):
     LC_BASE_URL, LC_API_KEY, LC_MODEL, LC_SYSTEM, LC_TEMPERATURE
 """
 import sys
@@ -1020,168 +1019,6 @@ def run_tui():
 
 
 # ---------------------------------------------------------------------------
-# GUI 모드 — tkinter(표준 라이브러리). TUI와 동일하게 core 를 직접 호출하므로
-# 서버·프록시·CORS 가 모두 불필요하다. 스트리밍은 백그라운드 스레드에서 받아
-# root.after() 로 UI 스레드에 안전하게 넘긴다.
-# ---------------------------------------------------------------------------
-def run_gui():
-    import tkinter as tk
-    from tkinter import ttk, scrolledtext
-
-    root = tk.Tk()
-    root.title("Light Chat (GUI)")
-    root.geometry("720x580")
-
-    g = os.environ.get
-    v_base = tk.StringVar(value=g("LC_BASE_URL", "https://api.openai.com/v1"))
-    v_key = tk.StringVar(value=g("LC_API_KEY", ""))
-    v_model = tk.StringVar(value=g("LC_MODEL", ""))
-    v_system = tk.StringVar(value=g("LC_SYSTEM", ""))
-    v_temp = tk.StringVar(value=g("LC_TEMPERATURE", ""))
-
-    history = []
-    state = {"streaming": False, "stop": False}
-
-    def set_status(msg):
-        status.config(text=msg)
-
-    def append(text, tag=None):
-        disp.config(state="normal")
-        disp.insert("end", text, tag)
-        disp.config(state="disabled")
-        disp.see("end")
-
-    # manual=True(↻ 클릭): 연결 테스트 겸 ✓/✗ 보고. manual=False(자동): 조용히 목록만.
-    def fetch_models(manual=False):
-        base, key = v_base.get().strip(), v_key.get().strip()
-        if not (base and key):
-            if manual:
-                set_status("Base URL·API Key 필요")
-            return
-        set_status("연결 확인 중…" if manual else "모델 불러오는 중…")
-
-        def work():
-            try:
-                models = list_models(base, key)
-                msg = ("✓ 연결 정상 (%d개 모델)" if manual else "%d개 모델 로드됨") % len(models)
-                root.after(0, lambda: (combo.configure(values=models), set_status(msg)))
-            except Exception as e:
-                pre = "✗ 연결 실패: " if manual else "모델 실패: "
-                root.after(0, lambda: set_status(pre + str(e)))
-        threading.Thread(target=work, daemon=True).start()
-
-    def finish(acc, err, meta):
-        append("\n")
-        if err:
-            append("[오류] %s\n" % err, "err")
-        else:
-            line = _fmt_metrics(meta["t0"], meta["first"], time.perf_counter(),
-                                meta["chunks"], meta["stats"].get("usage"))
-            if line:
-                append(line + "\n", "meta")     # 각 응답 아래에 메트릭 한 줄
-        if acc:
-            history.append({"role": "assistant", "content": "".join(acc)})
-        elif history and history[-1]["role"] == "user":
-            history.pop()  # 빈 응답이면 직전 사용자 메시지 되돌림
-        state.update(streaming=False, stop=False)
-        send_btn.config(text="전송")
-        set_status("")
-
-    def send(event=None):
-        if state["streaming"]:
-            state["stop"] = True            # 응답 중이면 '중지'로 동작
-            return "break"
-        text = input_box.get("1.0", "end").strip()
-        base, key, model = v_base.get().strip(), v_key.get().strip(), v_model.get().strip()
-        if not text:
-            return "break"
-        if not (base and key and model):
-            set_status("Base URL·API Key·Model 을 먼저 입력하세요"); return "break"
-        input_box.delete("1.0", "end")
-        append("나> ", "user"); append(text + "\n")
-        history.append({"role": "user", "content": text})
-        msgs = history[:]
-        if v_system.get().strip():
-            msgs = [{"role": "system", "content": v_system.get().strip()}] + msgs
-        temp = None
-        try:
-            temp = float(v_temp.get())
-        except ValueError:
-            pass
-        append("AI> ", "ai")
-        state.update(streaming=True, stop=False)
-        send_btn.config(text="중지")
-        set_status("응답 중…")
-        acc = []
-        meta = {"t0": time.perf_counter(), "first": None, "chunks": 0, "stats": {}}
-
-        def work():
-            try:
-                for delta in chat_stream(base, key, model, msgs, temp, meta["stats"]):
-                    if state["stop"]:
-                        break
-                    if meta["first"] is None:
-                        meta["first"] = time.perf_counter()
-                    meta["chunks"] += 1
-                    acc.append(delta)
-                    root.after(0, lambda d=delta: append(d, "ai"))
-                root.after(0, lambda: finish(acc, None, meta))
-            except Exception as e:
-                root.after(0, lambda e=e: finish(acc, e, meta))
-        threading.Thread(target=work, daemon=True).start()
-        return "break"
-
-    def clear():
-        history.clear()
-        disp.config(state="normal"); disp.delete("1.0", "end"); disp.config(state="disabled")
-        set_status("")
-
-    # 설정 영역
-    top = ttk.Frame(root, padding=8)
-    top.pack(fill="x")
-    top.columnconfigure(1, weight=1)
-    ttk.Label(top, text="Base URL").grid(row=0, column=0, sticky="w", pady=2)
-    ttk.Entry(top, textvariable=v_base).grid(row=0, column=1, columnspan=2, sticky="ew", pady=2)
-    ttk.Label(top, text="API Key").grid(row=1, column=0, sticky="w", pady=2)
-    ttk.Entry(top, textvariable=v_key, show="*").grid(row=1, column=1, columnspan=2, sticky="ew", pady=2)
-    ttk.Label(top, text="Model").grid(row=2, column=0, sticky="w", pady=2)
-    combo = ttk.Combobox(top, textvariable=v_model)  # 편집 가능한 네이티브 드롭다운
-    combo.grid(row=2, column=1, sticky="ew", pady=2)
-    ttk.Button(top, text="↻ 모델/연결", command=lambda: fetch_models(True)).grid(row=2, column=2, padx=(6, 0))
-    ttk.Label(top, text="System").grid(row=3, column=0, sticky="w", pady=2)
-    ttk.Entry(top, textvariable=v_system).grid(row=3, column=1, columnspan=2, sticky="ew", pady=2)
-    ttk.Label(top, text="Temp").grid(row=4, column=0, sticky="w", pady=2)
-    ttk.Entry(top, textvariable=v_temp, width=8).grid(row=4, column=1, sticky="w", pady=2)
-
-    # 대화 표시
-    disp = scrolledtext.ScrolledText(root, wrap="word", state="disabled", font=("Segoe UI", 10))
-    disp.pack(fill="both", expand=True, padx=8)
-    disp.tag_config("user", foreground="#1d6fd8", font=("Segoe UI", 10, "bold"))
-    disp.tag_config("ai", foreground="#111111")
-    disp.tag_config("err", foreground="#c0392b")
-    disp.tag_config("meta", foreground="#888888", font=("Segoe UI", 8))
-
-    # 입력 영역
-    bottom = ttk.Frame(root, padding=8)
-    bottom.pack(fill="x")
-    bottom.columnconfigure(0, weight=1)
-    input_box = tk.Text(bottom, height=3, wrap="word", font=("Segoe UI", 10))
-    input_box.grid(row=0, column=0, sticky="ew")
-    send_btn = ttk.Button(bottom, text="전송", command=send)
-    send_btn.grid(row=0, column=1, padx=(6, 0), sticky="n")
-    ttk.Button(bottom, text="지우기", command=clear).grid(row=0, column=2, padx=(6, 0), sticky="n")
-    status = ttk.Label(root, text="", foreground="#888888", padding=(8, 0, 8, 4))
-    status.pack(fill="x")
-
-    input_box.bind("<Return>", send)              # Enter 전송
-    input_box.bind("<Shift-Return>", lambda e: None)  # Shift+Enter 줄바꿈
-    input_box.focus_set()
-    if v_base.get().strip() and v_key.get().strip():
-        root.after(150, fetch_models)
-    root.mainloop()
-
-
-# ---------------------------------------------------------------------------
 def main():
     args = sys.argv[1:]
     if "-h" in args or "--help" in args:
@@ -1189,9 +1026,6 @@ def main():
         return
     if "--tui" in args:
         run_tui()
-        return
-    if "--gui" in args:
-        run_gui()
         return
     port = next((int(a) for a in args if a.isdigit()), 8000)
     run_web(port)
