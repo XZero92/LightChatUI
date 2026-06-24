@@ -41,6 +41,7 @@ API_TIMEOUT = 600
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 MODELS_PATH = "/models"
 CHAT_COMPLETIONS_PATH = "/chat/completions"
+INVALID_BODY = object()
 BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
               "AppleWebKit/537.36 (KHTML, like Gecko) "
               "Chrome/124.0.0.0 Safari/537.36")
@@ -524,27 +525,31 @@ HTML = r"""<!DOCTYPE html>
     let buf = "";
     let usageTok = null;
 
+    function processLine(line) {
+      const t = line.trim();
+      if (!t.startsWith("data:")) return;
+      const data = t.slice(5).trim();
+      if (data === "[DONE]") return;
+      try {
+        const json = JSON.parse(data);
+        if (json.usage && typeof json.usage.completion_tokens === "number") {
+          usageTok = json.usage.completion_tokens;
+        }
+        const delta = extractDelta(json);
+        if (delta) onDelta(delta);
+      } catch (_) { /* ignore partial */ }
+    }
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       buf += decoder.decode(value, { stream: true });
       const lines = buf.split("\n");
       buf = lines.pop();
-      for (const line of lines) {
-        const t = line.trim();
-        if (!t.startsWith("data:")) continue;
-        const data = t.slice(5).trim();
-        if (data === "[DONE]") continue;
-        try {
-          const json = JSON.parse(data);
-          if (json.usage && typeof json.usage.completion_tokens === "number") {
-            usageTok = json.usage.completion_tokens;
-          }
-          const delta = extractDelta(json);
-          if (delta) onDelta(delta);
-        } catch (_) { /* ignore partial */ }
-      }
+      lines.forEach(processLine);
     }
+    buf += decoder.decode();
+    if (buf.trim()) processLine(buf);
     return usageTok;
   }
 
@@ -673,6 +678,8 @@ def model_id(item):
 
 
 def extract_model_ids(data):
+    if not isinstance(data, dict):
+        return []
     items = data.get("data") or data.get("models") or []
     return sorted(v for v in (model_id(item) for item in items) if v)
 
@@ -704,6 +711,13 @@ def extract_chat_delta(obj):
         return obj["choices"][0]["delta"].get("content")
     except (KeyError, IndexError, AttributeError, TypeError):
         return None
+
+
+def close_http_error(err):
+    fp = getattr(err, "fp", None)
+    if fp is not None:
+        fp.close()
+    err.close()
 
 
 def open_upstream(url, api_key=None, data=None, method="GET", content_type=None):
@@ -775,7 +789,10 @@ class Handler(BaseHTTPRequestHandler):
         self._send_bytes(code, "application/json", encode_json(obj))
 
     def _request_body(self):
-        length = int(self.headers.get("Content-Length", 0) or 0)
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+        except ValueError:
+            return INVALID_BODY
         return self.rfile.read(length) if length else None
 
     def _proxy_request(self, target, body):
@@ -790,9 +807,12 @@ class Handler(BaseHTTPRequestHandler):
         return req
 
     def _send_http_error(self, err):
-        payload = err.read()
-        content_type = err.headers.get("Content-Type", "application/json")
-        self._send_bytes(err.code, content_type, payload)
+        try:
+            payload = err.read()
+            content_type = err.headers.get("Content-Type", "application/json")
+            self._send_bytes(err.code, content_type, payload)
+        finally:
+            close_http_error(err)
 
     def _stream_response(self, resp):
         self.send_response(resp.status)
@@ -812,7 +832,12 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "Missing X-Target-URL header"})
             return
 
-        req = self._proxy_request(target, self._request_body())
+        body = self._request_body()
+        if body is INVALID_BODY:
+            self._json(400, {"error": "Invalid Content-Length header"})
+            return
+
+        req = self._proxy_request(target, body)
 
         try:
             with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
