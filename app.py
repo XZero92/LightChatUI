@@ -27,8 +27,20 @@ import urllib.request
 import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+
+def configure_text_output():
+    """Windows 레거시 콘솔에서 도움말/로그 출력이 인코딩 오류로 멈추지 않게 한다."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+
+
 # 프록시가 업스트림으로 전달할 요청 헤더
 FORWARD_HEADERS = ("Authorization", "Content-Type", "Accept")
+API_TIMEOUT = 600
+DEFAULT_BASE_URL = "https://api.openai.com/v1"
+MODELS_PATH = "/models"
+CHAT_COMPLETIONS_PATH = "/chat/completions"
 BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
               "AppleWebKit/537.36 (KHTML, like Gecko) "
               "Chrome/124.0.0.0 Safari/537.36")
@@ -367,15 +379,14 @@ HTML = r"""<!DOCTYPE html>
   // manual=true(↻ 클릭): 연결 테스트를 겸해 ✓/✗ 를 명확히 보고 + 빈 칸 검증.
   // manual=false(타이핑 디바운스·로드 시 자동): 조용히 목록만 채움.
   async function fetchModels(manual) {
-    if (!els.baseUrl.value || !els.apiKey.value) {
+    if (!hasModelSettings()) {
       if (manual) {
-        els.settings.classList.add("open");
-        els.status.textContent = "Base URL·API Key 를 먼저 입력하세요";
+        openSettingsWithStatus("Base URL·API Key 를 먼저 입력하세요");
       }
       return;
     }
     els.refreshModels.classList.add("spin");
-    if (manual) els.status.textContent = "연결 확인 중…";
+    if (manual) setStatus("연결 확인 중…");
     try {
       const res = await apiFetch("/models", {
         headers: { "Authorization": "Bearer " + els.apiKey.value },
@@ -385,12 +396,12 @@ HTML = r"""<!DOCTYPE html>
         throw new Error("HTTP " + res.status + (t ? " — " + t.slice(0, 120) : ""));
       }
       MODELS = parseModels(await res.json());
-      els.status.textContent = manual
+      setStatus(manual
         ? "✓ 연결 정상 (" + MODELS.length + "개 모델)"
-        : (MODELS.length ? MODELS.length + "개 모델 로드됨" : "모델 없음");
+        : (MODELS.length ? MODELS.length + "개 모델 로드됨" : "모델 없음"));
       if (isOpen()) openList("");
     } catch (e) {
-      els.status.textContent = (manual ? "✗ 연결 실패: " : "모델 목록 실패: ") + (e.message || e);
+      setStatus((manual ? "✗ 연결 실패: " : "모델 목록 실패: ") + (e.message || e));
     } finally {
       els.refreshModels.classList.remove("spin");
     }
@@ -412,6 +423,15 @@ HTML = r"""<!DOCTYPE html>
   // --- conversation state ---
   let history = JSON.parse(sessionStorage.getItem("lc_history") || "[]");
   function saveHistory() { sessionStorage.setItem("lc_history", JSON.stringify(history)); }
+
+  function setStatus(text) {
+    els.status.textContent = text;
+  }
+
+  function openSettingsWithStatus(text) {
+    els.settings.classList.add("open");
+    setStatus(text);
+  }
 
   function renderInline(text) {
     // minimal: escape HTML, then render ``` code blocks and `inline code`
@@ -466,6 +486,68 @@ HTML = r"""<!DOCTYPE html>
     return s;
   }
 
+  function hasModelSettings() {
+    return !!(els.baseUrl.value && els.apiKey.value);
+  }
+
+  function hasChatSettings() {
+    return !!(els.baseUrl.value && els.apiKey.value && els.model.value);
+  }
+
+  function buildRequestMessages() {
+    const msgs = [];
+    const system = els.system.value.trim();
+    if (system) msgs.push({ role: "system", content: system });
+    history.forEach((m) => msgs.push({ role: m.role, content: m.content }));
+    return msgs;
+  }
+
+  function buildChatBody(messages) {
+    const body = {
+      model: els.model.value,
+      messages,
+      stream: true,
+      stream_options: { include_usage: true },
+    };
+    const temp = parseFloat(els.temperature.value);
+    if (!isNaN(temp)) body.temperature = temp;
+    return body;
+  }
+
+  function extractDelta(json) {
+    return json.choices?.[0]?.delta?.content || "";
+  }
+
+  async function readChatStream(res, onDelta) {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let usageTok = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop();
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t.startsWith("data:")) continue;
+        const data = t.slice(5).trim();
+        if (data === "[DONE]") continue;
+        try {
+          const json = JSON.parse(data);
+          if (json.usage && typeof json.usage.completion_tokens === "number") {
+            usageTok = json.usage.completion_tokens;
+          }
+          const delta = extractDelta(json);
+          if (delta) onDelta(delta);
+        } catch (_) { /* ignore partial */ }
+      }
+    }
+    return usageTok;
+  }
+
   // --- sending ---
   let controller = null;
 
@@ -473,9 +555,8 @@ HTML = r"""<!DOCTYPE html>
     const text = els.input.value.trim();
     if (!text || controller) return;
 
-    if (!els.baseUrl.value || !els.apiKey.value || !els.model.value) {
-      els.settings.classList.add("open");
-      els.status.textContent = "Base URL · API Key · Model 을 먼저 입력하세요";
+    if (!hasChatSettings()) {
+      openSettingsWithStatus("Base URL · API Key · Model 을 먼저 입력하세요");
       return;
     }
 
@@ -485,27 +566,14 @@ HTML = r"""<!DOCTYPE html>
     els.input.value = "";
     els.input.style.height = "auto";
 
-    const msgs = [];
-    if (els.system.value.trim()) msgs.push({ role: "system", content: els.system.value.trim() });
-    history.forEach((m) => msgs.push({ role: m.role, content: m.content }));
-
     const bubble = addBubble("assistant", "");
     let acc = "";
     controller = new AbortController();
     els.send.textContent = "중지";
-    els.status.textContent = "응답 중…";
-
-    const body = {
-      model: els.model.value,
-      messages: msgs,
-      stream: true,
-      stream_options: { include_usage: true },
-    };
-    const temp = parseFloat(els.temperature.value);
-    if (!isNaN(temp)) body.temperature = temp;
+    setStatus("응답 중…");
 
     const t0 = performance.now();
-    let firstAt = null, chunks = 0, usageTok = null;
+    let firstAt = null, chunks = 0;
     try {
       const res = await apiFetch("/chat/completions", {
         method: "POST",
@@ -513,7 +581,7 @@ HTML = r"""<!DOCTYPE html>
           "Content-Type": "application/json",
           "Authorization": "Bearer " + els.apiKey.value,
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify(buildChatBody(buildRequestMessages())),
         signal: controller.signal,
       });
 
@@ -522,52 +590,28 @@ HTML = r"""<!DOCTYPE html>
         throw new Error("HTTP " + res.status + ": " + errText.slice(0, 500));
       }
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop();
-        for (const line of lines) {
-          const t = line.trim();
-          if (!t.startsWith("data:")) continue;
-          const data = t.slice(5).trim();
-          if (data === "[DONE]") continue;
-          try {
-            const json = JSON.parse(data);
-            if (json.usage && typeof json.usage.completion_tokens === "number") {
-              usageTok = json.usage.completion_tokens;   // 서버 제공 정확 토큰 수
-            }
-            const delta = json.choices?.[0]?.delta?.content;
-            if (delta) {
-              if (firstAt === null) firstAt = performance.now();
-              chunks++;
-              acc += delta;
-              bubble.innerHTML = renderInline(acc);
-              els.messages.scrollTop = els.messages.scrollHeight;
-            }
-          } catch (_) { /* ignore partial */ }
-        }
-      }
+      const usageTok = await readChatStream(res, (delta) => {
+        if (firstAt === null) firstAt = performance.now();
+        chunks++;
+        acc += delta;
+        bubble.innerHTML = renderInline(acc);
+        els.messages.scrollTop = els.messages.scrollHeight;
+      });
 
       const mtext = metricsText(t0, firstAt, chunks, usageTok);
       if (mtext) addMetrics(bubble, mtext);
       history.push({ role: "assistant", content: acc, metrics: mtext });
       saveHistory();
-      els.status.textContent = "";
+      setStatus("");
     } catch (e) {
       if (e.name === "AbortError") {
         if (acc) { history.push({ role: "assistant", content: acc }); saveHistory(); }
-        els.status.textContent = "중지됨";
+        setStatus("중지됨");
       } else {
         bubble.parentElement.className = "msg error";
         bubble.previousSibling.textContent = "오류";
         bubble.innerHTML = renderInline(String(e.message || e));
-        els.status.textContent = "오류";
+        setStatus("오류");
       }
     } finally {
       controller = null;
@@ -591,14 +635,14 @@ HTML = r"""<!DOCTYPE html>
     history = [];
     saveHistory();
     renderHistory();
-    els.status.textContent = "";
+    setStatus("");
   });
 
   // --- init ---
   loadSettings();
   renderHistory();
   if (!els.apiKey.value) els.settings.classList.add("open");
-  if (els.baseUrl.value && els.apiKey.value) fetchModels();
+  if (hasModelSettings()) fetchModels();
 })();
 </script>
 </body>
@@ -612,40 +656,36 @@ HTML_BYTES = HTML.encode("utf-8")
 # 공유 코어 — 업스트림(OpenAI 호환 API) 호출. 웹 프록시·TUI가 함께 쓴다.
 # 브라우저 형태의 User-Agent를 붙여 Cloudflare 등의 봇 차단을 피한다.
 # ---------------------------------------------------------------------------
-def open_upstream(url, api_key=None, data=None, method="GET", content_type=None):
-    req = urllib.request.Request(url, data=data, method=method)
-    if api_key:
-        req.add_header("Authorization", "Bearer " + api_key)
-    if content_type:
-        req.add_header("Content-Type", content_type)
-    req.add_header("Accept", "application/json")
-    req.add_header("User-Agent", BROWSER_UA)
-    return urllib.request.urlopen(req, timeout=600)
+def api_url(base, path):
+    return base.rstrip("/") + path
 
 
-def list_models(base, key):
-    """GET {base}/models → 정렬된 모델 id 리스트."""
-    with open_upstream(base.rstrip("/") + "/models", key) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+def encode_json(obj):
+    return json.dumps(obj).encode("utf-8")
+
+
+def model_id(item):
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        return item.get("id") or item.get("name")
+    return None
+
+
+def extract_model_ids(data):
     items = data.get("data") or data.get("models") or []
-    ids = []
-    for m in items:
-        v = m if isinstance(m, str) else (m.get("id") or m.get("name"))
-        if v:
-            ids.append(v)
-    return sorted(ids)
+    return sorted(v for v in (model_id(item) for item in items) if v)
 
 
-def chat_stream(base, key, model, messages, temperature=None, stats=None):
-    """POST {base}/chat/completions (stream) → 토큰(content) 제너레이터.
-    stats(dict)를 주면 서버가 보낸 usage 를 stats['usage'] 에 채운다."""
+def build_chat_payload(model, messages, temperature=None):
     payload = {"model": model, "messages": messages, "stream": True,
                "stream_options": {"include_usage": True}}
     if temperature is not None:
         payload["temperature"] = temperature
-    data = json.dumps(payload).encode("utf-8")
-    resp = open_upstream(base.rstrip("/") + "/chat/completions", key,
-                         data=data, method="POST", content_type="application/json")
+    return payload
+
+
+def iter_sse_json(resp):
     for raw in resp:
         line = raw.decode("utf-8", "replace").strip()
         if not line.startswith("data:"):
@@ -654,17 +694,48 @@ def chat_stream(base, key, model, messages, temperature=None, stats=None):
         if chunk == "[DONE]":
             break
         try:
-            obj = json.loads(chunk)
+            yield json.loads(chunk)
         except ValueError:
             continue  # 부분 수신 무시
-        if stats is not None and isinstance(obj.get("usage"), dict):
-            stats["usage"] = obj["usage"]          # 서버 제공 정확 토큰 수
-        try:
-            delta = obj["choices"][0]["delta"].get("content")
-        except (KeyError, IndexError, AttributeError, TypeError):
-            delta = None
-        if delta:
-            yield delta
+
+
+def extract_chat_delta(obj):
+    try:
+        return obj["choices"][0]["delta"].get("content")
+    except (KeyError, IndexError, AttributeError, TypeError):
+        return None
+
+
+def open_upstream(url, api_key=None, data=None, method="GET", content_type=None):
+    req = urllib.request.Request(url, data=data, method=method)
+    if api_key:
+        req.add_header("Authorization", "Bearer " + api_key)
+    if content_type:
+        req.add_header("Content-Type", content_type)
+    req.add_header("Accept", "application/json")
+    req.add_header("User-Agent", BROWSER_UA)
+    return urllib.request.urlopen(req, timeout=API_TIMEOUT)
+
+
+def list_models(base, key):
+    """GET {base}/models → 정렬된 모델 id 리스트."""
+    with open_upstream(api_url(base, MODELS_PATH), key) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return extract_model_ids(data)
+
+
+def chat_stream(base, key, model, messages, temperature=None, stats=None):
+    """POST {base}/chat/completions (stream) → 토큰(content) 제너레이터.
+    stats(dict)를 주면 서버가 보낸 usage 를 stats['usage'] 에 채운다."""
+    data = encode_json(build_chat_payload(model, messages, temperature))
+    with open_upstream(api_url(base, CHAT_COMPLETIONS_PATH), key, data=data,
+                       method="POST", content_type="application/json") as resp:
+        for obj in iter_sse_json(resp):
+            if stats is not None and isinstance(obj.get("usage"), dict):
+                stats["usage"] = obj["usage"]          # 서버 제공 정확 토큰 수
+            delta = extract_chat_delta(obj)
+            if delta:
+                yield delta
 
 
 def _fmt_metrics(t0, first_at, end, chunks, usage):
@@ -691,22 +762,23 @@ class Handler(BaseHTTPRequestHandler):
 
     # --- 내장 UI ---
     def _serve_ui(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(HTML_BYTES)))
+        self._send_bytes(200, "text/html; charset=utf-8", HTML_BYTES)
+
+    def _send_bytes(self, code, content_type, payload):
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(HTML_BYTES)
+        self.wfile.write(payload)
 
-    # --- API 프록시 (GET=models, POST=chat/completions 등) ---
-    def _proxy(self):
-        target = self.headers.get("X-Target-URL")
-        if not target:
-            self._json(400, {"error": "Missing X-Target-URL header"})
-            return
+    def _json(self, code, obj):
+        self._send_bytes(code, "application/json", encode_json(obj))
 
+    def _request_body(self):
         length = int(self.headers.get("Content-Length", 0) or 0)
-        body = self.rfile.read(length) if length else None
+        return self.rfile.read(length) if length else None
 
+    def _proxy_request(self, target, body):
         req = urllib.request.Request(target, data=body, method=self.command)
         for h in FORWARD_HEADERS:
             v = self.headers.get(h)
@@ -715,21 +787,14 @@ class Handler(BaseHTTPRequestHandler):
         # Cloudflare 등 일부 게이트웨이는 Python-urllib 기본 UA를 403으로 차단하므로
         # 브라우저 형태의 User-Agent를 사용한다.
         req.add_header("User-Agent", BROWSER_UA)
+        return req
 
-        try:
-            resp = urllib.request.urlopen(req, timeout=600)
-        except urllib.error.HTTPError as e:
-            payload = e.read()
-            self.send_response(e.code)
-            self.send_header("Content-Type", e.headers.get("Content-Type", "application/json"))
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-            return
-        except Exception as e:  # 연결 실패 등
-            self._json(502, {"error": "Upstream request failed: %s" % e})
-            return
+    def _send_http_error(self, err):
+        payload = err.read()
+        content_type = err.headers.get("Content-Type", "application/json")
+        self._send_bytes(err.code, content_type, payload)
 
+    def _stream_response(self, resp):
         self.send_response(resp.status)
         self.send_header("Content-Type", resp.headers.get("Content-Type", "application/octet-stream"))
         self.end_headers()
@@ -740,13 +805,22 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass  # 클라이언트가 중지함
 
-    def _json(self, code, obj):
-        data = json.dumps(obj).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+    # --- API 프록시 (GET=models, POST=chat/completions 등) ---
+    def _proxy(self):
+        target = self.headers.get("X-Target-URL")
+        if not target:
+            self._json(400, {"error": "Missing X-Target-URL header"})
+            return
+
+        req = self._proxy_request(target, self._request_body())
+
+        try:
+            with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
+                self._stream_response(resp)
+        except urllib.error.HTTPError as e:
+            self._send_http_error(e)
+        except Exception as e:  # 연결 실패 등
+            self._json(502, {"error": "Upstream request failed: %s" % e})
 
     def do_GET(self):
         if self.path == "/proxy":
@@ -939,7 +1013,7 @@ def run_tui():
 
     print(c("1;36", "Light Chat (TUI)"))
     if not base:
-        base = input("Base URL [https://api.openai.com/v1]: ").strip() or "https://api.openai.com/v1"
+        base = input("Base URL [%s]: " % DEFAULT_BASE_URL).strip() or DEFAULT_BASE_URL
     if not key:
         key = masked_input("API Key: ").strip()
     if not model:
@@ -1020,6 +1094,7 @@ def run_tui():
 
 # ---------------------------------------------------------------------------
 def main():
+    configure_text_output()
     args = sys.argv[1:]
     if "-h" in args or "--help" in args:
         print(__doc__)
